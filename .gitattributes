@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.bmp binary
+*.chm binary
+*.elf binary
+*.bin binary
+*.hex binary
+*.xlsx binary
