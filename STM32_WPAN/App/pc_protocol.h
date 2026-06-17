@@ -28,6 +28,7 @@ extern "C" {
 #define PC_PROTOCOL_EVT_SCAN_BEGIN       0x90U
 #define PC_PROTOCOL_EVT_SCAN_POINTS      0x91U
 #define PC_PROTOCOL_EVT_SCAN_END         0x92U
+#define PC_PROTOCOL_EVT_SENSOR_READINGS  0x93U
 #define PC_PROTOCOL_EVT_BLE_RAW          0xA0U
 
 #define PC_PROTOCOL_STATUS_OK            0x00U
