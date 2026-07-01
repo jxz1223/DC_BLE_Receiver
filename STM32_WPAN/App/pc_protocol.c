@@ -318,6 +318,7 @@ static void PC_Protocol_HandleFrame(const PC_Protocol_Frame_t *pFrame)
     case PC_PROTOCOL_CMD_SCAN_START:
     case PC_PROTOCOL_CMD_SET_DAC:
     case PC_PROTOCOL_CMD_ABORT:
+    case PC_PROTOCOL_CMD_PD2_PULSE:
       status = (CommandHandler != 0) ? CommandHandler(pFrame) : PC_PROTOCOL_STATUS_OK;
       if (status == PC_PROTOCOL_STATUS_DEFERRED)
       {

@@ -123,6 +123,7 @@ static P2P_ButtonCharValue_t      ButtonStatus;
 /* Private defines ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define PC_BLE_FRAME_MAX_SIZE                 246U
+#define RX_LINK_BLUE_BLINK_MS                 250U
 
 /* USER CODE END PD */
 
@@ -163,13 +164,22 @@ static tBleStatus Write_Char_With_Length(uint16_t UUID, uint8_t Service_Instance
 static uint8_t Pc_ForwardCommandToSensor(const PC_Protocol_Frame_t *pFrame);
 static uint8_t Pc_BuildWireFrame(const PC_Protocol_Frame_t *pFrame, uint8_t *pBuffer, uint16_t buffer_length, uint8_t *pFrameLength);
 static uint8_t Pc_IsWireFrame(const uint8_t *pPayload, uint8_t length);
+static void Button_SendPd2PulseCommand(void);
 static uint8_t PcBleFrame[PC_BLE_FRAME_MAX_SIZE];
+static uint16_t ButtonCommandSeq = 1U;
+static uint8_t LinkBlueBlinkTimerId;
+static uint8_t LinkBlueBlinkTimerReady = 0U;
+static uint8_t LinkBlueBlinkEnabled = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 static void Gatt_Notification(P2P_Client_App_Notification_evt_t *pNotification);
 static SVCCTL_EvtAckStatus_t Event_Handler(void *Event);
 /* USER CODE BEGIN PFP */
+static void LinkBlueBlink_Start(void);
+static void LinkBlueBlink_Stop(void);
+static void LinkBlueBlink_Timeout(void);
+static uint32_t MsToTsTicks(uint32_t timeout_ms);
 
 /* USER CODE END PFP */
 
@@ -190,6 +200,13 @@ void P2PC_APP_Init(void)
   UTIL_SEQ_RegTask( 1<< CFG_TASK_SW3_BUTTON_PUSHED_ID, UTIL_SEQ_RFU, Button3_Trigger_Received );
   PC_Protocol_Init();
   PC_Protocol_RegisterCommandHandler(Pc_Command_Received);
+  if (HW_TS_Create(CFG_TIM_PROC_ID_ISR,
+                   &LinkBlueBlinkTimerId,
+                   hw_ts_Repeated,
+                   LinkBlueBlink_Timeout) == hw_ts_Successful)
+  {
+    LinkBlueBlinkTimerReady = 1U;
+  }
 /* USER CODE END P2PC_APP_Init_1 */
   for(index = 0; index < BLE_CFG_CLT_MAX_NBR_CB; index++)
   {
@@ -226,12 +243,14 @@ void P2PC_APP_Notification(P2PC_APP_ConnHandle_Not_evt_t *pNotification)
 /* USER CODE BEGIN PEER_CONN_HANDLE_EVT */
       LED_On(GREEN);
       LED_Off(RED);
+      LinkBlueBlink_Start();
       Pc_SendDiag("RX_BLE_CONNECTED");
 /* USER CODE END PEER_CONN_HANDLE_EVT */
       break;
 
     case PEER_DISCON_HANDLE_EVT :
 /* USER CODE BEGIN PEER_DISCON_HANDLE_EVT */
+      LinkBlueBlink_Stop();
       LED_Off(GREEN);
       LED_On(RED);
       Connagain();
@@ -342,7 +361,6 @@ static SVCCTL_EvtAckStatus_t Event_Handler(void *Event)
 #if(CFG_DEBUG_APP_TRACE != 0)
                   APP_DBG_MSG("-- GATT : P2P_SERVICE_UUID FOUND - connection handle 0x%x \n", aP2PClientContext[index].connHandle);
 #endif
-                  LED_Toggle(BLUE);
                   Pc_SendDiag("RX_DT_SERVICE_FOUND");
 #if (UUID_128BIT_FORMAT==1)
                 aP2PClientContext[index].P2PServiceHandle = UNPACK_2_BYTE_PARAMETER(&pr->Attribute_Data_List[idx-16]);
@@ -408,7 +426,6 @@ static SVCCTL_EvtAckStatus_t Event_Handler(void *Event)
 #if(CFG_DEBUG_APP_TRACE != 0)
                   APP_DBG_MSG("-- GATT : DT_RX_CHAR_UUID FOUND - connection handle 0x%x\n", aP2PClientContext[index].connHandle);
 #endif
-                  LED_Toggle(BLUE);
                   Pc_SendDiag("RX_DT_RX_FOUND");
                   //aP2PClientContext[index].state = APP_BLE_DISCOVER_WRITE_DESC;
                   aP2PClientContext[index].P2PWriteToServerCharHdle = handle;
@@ -419,7 +436,6 @@ static SVCCTL_EvtAckStatus_t Event_Handler(void *Event)
 #if(CFG_DEBUG_APP_TRACE != 0)
                   APP_DBG_MSG("-- GATT : NOTIFICATION_CHAR_UUID FOUND  - connection handle 0x%x\n", aP2PClientContext[index].connHandle);
 #endif
-                  LED_Toggle(BLUE);
                   Pc_SendDiag("RX_DT_TX_FOUND");
                   aP2PClientContext[index].state = APP_BLE_DISCOVER_NOTIFICATION_CHAR_DESC;
                   aP2PClientContext[index].P2PNotificationCharHdle = handle;
@@ -481,7 +497,6 @@ static SVCCTL_EvtAckStatus_t Event_Handler(void *Event)
 
                     aP2PClientContext[index].P2PNotificationDescHandle = handle;
                     aP2PClientContext[index].state = APP_BLE_ENABLE_NOTIFICATION_DESC;
-                    LED_Toggle(BLUE);
                     Pc_SendDiag("RX_NOTIFY_DESC_FOUND");
 
                   }
@@ -571,15 +586,10 @@ void Gatt_Notification(P2P_Client_App_Notification_evt_t *pNotification)
     case P2P_NOTIFICATION_INFO_RECEIVED_EVT:
 /* USER CODE BEGIN P2P_NOTIFICATION_INFO_RECEIVED_EVT */
     	dtcc=dtcc+1;
-    	if (dtcc>20)
-    	{
-			LED_On(BLUE);
-		}
-		if (dtcc>40)
-		{
-			LED_Off(BLUE);
-			dtcc=0;
-		}
+      if (dtcc > 40)
+      {
+        dtcc = 0;
+      }
 		if (Pc_IsWireFrame(pNotification->DataTransfered.pPayload,
 							pNotification->DataTransfered.Length) != 0U)
 		{
@@ -703,7 +713,6 @@ void DTC_App_LinkReadyNotification(uint16_t ConnectionHandle)
 		}
     else
     {
-      LED_On(BLUE);
       Pc_SendDiag("RX_NOTIFY_ENABLE_SENT");
     }
 		APP_DBG_MSG("DTC_ENABLE_TX_NOTIFICATION complete event received \n");
@@ -724,6 +733,52 @@ void LED_Off(Led_TypeDef Led)
 void LED_Toggle(Led_TypeDef Led)
 {
   HAL_GPIO_TogglePin(GPIO_PORT[Led], GPIO_PIN[Led]);
+}
+
+static void LinkBlueBlink_Start(void)
+{
+  LinkBlueBlinkEnabled = 1U;
+
+  if (LinkBlueBlinkTimerReady != 0U)
+  {
+    LED_Off(BLUE);
+    HW_TS_Start(LinkBlueBlinkTimerId, MsToTsTicks(RX_LINK_BLUE_BLINK_MS));
+  }
+  else
+  {
+    LED_On(BLUE);
+  }
+}
+
+static void LinkBlueBlink_Stop(void)
+{
+  LinkBlueBlinkEnabled = 0U;
+
+  if (LinkBlueBlinkTimerReady != 0U)
+  {
+    HW_TS_Stop(LinkBlueBlinkTimerId);
+  }
+
+  LED_Off(BLUE);
+}
+
+static void LinkBlueBlink_Timeout(void)
+{
+  if (LinkBlueBlinkEnabled != 0U)
+  {
+    LED_Toggle(BLUE);
+  }
+  else
+  {
+    LED_Off(BLUE);
+  }
+}
+
+static uint32_t MsToTsTicks(uint32_t timeout_ms)
+{
+  uint32_t timeout_ticks = ((timeout_ms * 1000U) + CFG_TS_TICK_VAL - 1U) / CFG_TS_TICK_VAL;
+
+  return (timeout_ticks == 0U) ? 1U : timeout_ticks;
 }
 
 void Connagain(void)
@@ -758,27 +813,21 @@ void HAL_GPIO_EXTI_Callback( uint16_t GPIO_Pin )
 void Button1_Trigger_Received(void)
 {
   APP_DBG_MSG("-- P2P APPLICATION CLIENT  : BUTTON PUSHED - WRITE TO SERVER \n ");
-  if(ButtonStatus.Button1 == 0x00)
-  {
-    ButtonStatus.Button1 = 0x01;
-  }else {
-    ButtonStatus.Button1 = 0x00;
-  }
-
-  Write_Char( DT_RX_CHAR_UUID, 0, (uint8_t *)&ButtonStatus);
-
+  Button_SendPd2PulseCommand();
   return;
 }
 
 void Button2_Trigger_Received(void)
 {
   APP_DBG_MSG("-- P2P APPLICATION CLIENT  : BUTTON2 PUSHED - WRITE TO SERVER \n ");
+  Button_SendPd2PulseCommand();
   return;
 }
 
 void Button3_Trigger_Received(void)
 {
   APP_DBG_MSG("-- P2P APPLICATION CLIENT  : BUTTON3 PUSHED - WRITE TO SERVER \n ");
+  Button_SendPd2PulseCommand();
   return;
 }
 
@@ -838,10 +887,39 @@ static uint8_t Pc_Command_Received(const PC_Protocol_Frame_t *pFrame)
     case PC_PROTOCOL_CMD_SCAN_START:
     case PC_PROTOCOL_CMD_SET_DAC:
     case PC_PROTOCOL_CMD_ABORT:
+    case PC_PROTOCOL_CMD_PD2_PULSE:
       return Pc_ForwardCommandToSensor(pFrame);
 
     default:
       return PC_PROTOCOL_STATUS_UNKNOWN_TYPE;
+  }
+}
+
+static void Button_SendPd2PulseCommand(void)
+{
+  PC_Protocol_Frame_t frame;
+  uint8_t status;
+  uint16_t duration_ms = 5000U;
+
+  memset(&frame, 0, sizeof(frame));
+  frame.Type = PC_PROTOCOL_CMD_PD2_PULSE;
+  frame.Flags = 0U;
+  frame.ScanId = 0U;
+  frame.Seq = ButtonCommandSeq++;
+  frame.PayloadLen = 2U;
+  frame.Payload[0] = (uint8_t)duration_ms;
+  frame.Payload[1] = (uint8_t)(duration_ms >> 8);
+
+  status = Pc_ForwardCommandToSensor(&frame);
+  if (status == PC_PROTOCOL_STATUS_DEFERRED)
+  {
+    LED_Toggle(GREEN);
+    Pc_SendDiag("RX_BUTTON_PD2_PULSE_SENT");
+  }
+  else
+  {
+    LED_Toggle(RED);
+    Pc_SendDiag("RX_BUTTON_PD2_PULSE_FAIL");
   }
 }
 

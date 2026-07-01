@@ -22,6 +22,7 @@ extern "C" {
 #define PC_PROTOCOL_CMD_SCAN_START       0x10U
 #define PC_PROTOCOL_CMD_SET_DAC          0x11U
 #define PC_PROTOCOL_CMD_ABORT            0x12U
+#define PC_PROTOCOL_CMD_PD2_PULSE        0x13U
 
 #define PC_PROTOCOL_EVT_ACK              0x80U
 #define PC_PROTOCOL_EVT_NACK             0x81U
